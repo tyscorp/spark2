@@ -32,10 +32,18 @@ app.get('/search', function (req, res) {
             var time = Date.now();
 
             return cn.exec().map(function (result) {
+                result.type = cn.table_name;
+
                 // temporary scoring function
                 result.score = cn.score * _.reduce(Q, function (score, keyword, index) {
-                    if (result.title && new RegExp(keyword, 'i').test(result.title)) score += 1;
-                    if (result.name && new RegExp(keyword, 'i').test(result.name)) score += 1;
+                    if (result.title && new RegExp(keyword, 'i').test(result.title)) {
+                        score += 1 + (keyword.length / result.title.length);
+                        return score;
+                    }
+                    if (result.name && new RegExp(keyword, 'i').test(result.name)) {
+                        score += 1 + (keyword.length / result.name.length);
+                        return score;
+                    }
 
                     return score;
                 }, 0);
