@@ -65,7 +65,7 @@ CandidateNetwork.getQuery = function () {
     return 'SELECT * FROM ' +
             this.getTables().join(', ') + ' ' +
             'WHERE ' + this.getJoins().join(' AND ') + ' ' +
-            'AND ' + this.getMatches(q).join(' AND ') + ' LIMIT 10000;';
+            'AND ' + this.getMatches(q).join(' AND ') + ';';
             
 };
 
@@ -93,14 +93,28 @@ CandidateNetwork.prototype.exec = function () {
                'FROM ' +
                tables + ' ' +
                'WHERE ' + joins + ' ' +
-               'AND ' + match + ' LIMIT 10000;'
+               'AND ' + match + ';'
     });
 
     return Promise.map(queries, function (query) {
         return mysql.queryAsync(query).get(0).tap(function () { console.log(query); });    
     })
-    .then(function (rows) {
-        return _(rows).flatten().uniq('id').value();
+    .then(function (results) {
+        if (results.length === 1) {
+            return results[0];
+        }
+
+        var ids = _.map(results, function (rows) {
+            return _(rows).pluck('id').value();
+        });
+
+        var valid = _.intersection.apply(_, ids);
+
+        return _.map(valid, function (id) {
+            return _.merge.apply(_, _.map(results, function (rows) {
+                return _.find(rows, { id : id });
+            }));
+        });
     });      
 };
 
@@ -234,6 +248,20 @@ Node.prototype.getJoins = function () {
         x = _.map(table.join, function (join) {
             if (_.find(self.connections, { table_name: join.data_table })) {
                 return { 1: '`' + self.table_name + '`.`' + join.key[0] + '`', 2: '`' + join.data_table + '`.`' + join.key[1] + '`' };
+            }
+
+            return [];
+        });
+    }
+    else {
+        var table = getTable(self.table_name);
+
+        x = _.map(table.fk, function (table_name) {
+
+            if (_.find(self.connections, { table_name: table_name })) {
+                var t = getTable(table_name);
+                var join = _.find(t.join, { data_table: self.table_name });
+                return { 1: '`' + self.table_name + '`.`' + join.key[1] + '`', 2: '`' + table_name + '`.`' + join.key[0] + '`' };
             }
 
             return [];
