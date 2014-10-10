@@ -1,0 +1,25 @@
+{
+  "name": "spark2",
+  "version": "0.0.0",
+  "description": "spark2 ======",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tyscorp/spark2.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/tyscorp/spark2/issues"
+  },
+  "homepage": "https://github.com/tyscorp/spark2",
+  "dependencies": {
+    "bluebird": "^2.3.5",
+    "express": "^4.9.6",
+    "lodash": "^2.4.1",
+    "mysql": "^2.5.1"
+  }
+}
