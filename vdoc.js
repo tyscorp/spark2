@@ -47,8 +47,7 @@ VirtualDocument.prototype.calculateScores = function (Q) {
         var score_a = jtt.calculateScoreA(Q, 0.2, avdl, lnidf);
 
         //jtt.score = jtt.score_a// * (1 + Math.log(1 + Math.log(1 - self.cn.getNormalizationScore())));
-        jtt.score_z = jtt.score_a * (1.5 / self.cn.getNormalizationScore());
-        jtt.score = jtt.score_z;
+        jtt.score = jtt.score_a * (1.5 / self.cn.getNormalizationScore());
     });
     
 };

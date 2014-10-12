@@ -45,15 +45,11 @@ JTT.prototype.calculateScoreA = function (Q, s, avdl, lnidf) {
     var tfweighted = this.tfweighted;
     var dl = this.dl;
 
-    if (this.data.id === 452) {
-        console.log(tf, dl, dl / avdl);
-    }
-
     this.score_a = _.reduce(Q, function (score, keyword, i) {
         if (!tfweighted[i]) return score;
 
         var a = 1 + Math.log(1 + Math.log(tfweighted[i]));
-        var b = (1 - s) + s;
+        var b = (1 - s) + s * (dl / avdl);
 
         return score + ((a / b) * (lnidf[i] + a*5));
         return score + (((a / b) * lnidf[i]));
