@@ -52,7 +52,7 @@ JTT.prototype.calculateScoreA = function (Q, s, avdl, lnidf) {
         var b = (1 - s) + s * (dl / avdl);
 
         return score + ((a / b) * (lnidf[i] + a*5));
-        return score + (((a / b) * lnidf[i]));
+        //return score + (((a / b) * lnidf[i]));
     }, 0);
 
     return this.score_a;
@@ -71,6 +71,9 @@ JTT.prototype.calcTF = function (Q) {
 JTT.prototype.toJSON = function () {
     var obj = {};
     obj[this.type] = _.merge(this.data, { score: this.score, score_a: this.score_a, score_z: this.score_z });
+    if (this.query) obj.query = this.query;
+    if (this.queries) obj.queries = this.queries;
+    if (this.time) obj.time = this.time;
     return obj;
 };
 
@@ -78,7 +81,7 @@ function matchKeyword (regex, tree, w) {
     return _.reduce(tree, function (tf, val, key) {
         if (_.isString(val)) {
             if (regex.test(val)) {
-                return tf + 1 + (w ? ((regex.toString().length - 3) / val.length) * 100: 0);
+                return tf + 1 + (w ? ((regex.toString().length - 3) / val.length) * 100 : 0);
             }
         }
         else {

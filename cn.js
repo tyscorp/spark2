@@ -4,19 +4,19 @@ var JTT = require('./jtt');
 var Table = require('./tables');
 var LRU = require('lru-cache');
 
-var queryCache = LRU(200);
+var queryCache = LRU(5);
 
 var mysql;
 
-function execQuery (query) {
-    if (queryCache.has(query)) return queryCache.get(query);
+function execQuery (cache, query) {
+    if (cache && queryCache.has(query)) return queryCache.get(query);
 
     var time = Date.now();
 
     return mysql.queryAsync(query).get(0).tap(function (results) {
         //console.log(/*query*/ (Date.now() - time) + ' ms');
 
-        queryCache.set(query, results);
+        cache && queryCache.set(query, results);
     });
 }
 
@@ -54,7 +54,7 @@ CandidateNetwork.getTables = function () {
 };
 
 // This is a *LOT* faster than multiple AND MATCH AGAINST
-CandidateNetwork.prototype.exec = function () {
+CandidateNetwork.prototype.exec = function (cache) {
     var q = mysql.escape(this.Q.join(' '));
     var tables = this.getTables().join(', ');
     var joins = this.getJoins().join(' AND ');
@@ -84,8 +84,10 @@ CandidateNetwork.prototype.exec = function () {
     });
 
     var cn = this;
+    var time = Date.now();
+    var self = this;
 
-    return Promise.map(queries, execQuery)
+    return Promise.map(queries, _.partial(execQuery, cache))
     .then(function (results) {
         if (results.length === 1) {
             return _.map(results[0], function (row) {
@@ -114,6 +116,15 @@ CandidateNetwork.prototype.exec = function () {
             return new JTT(result);
         })
         .value();*/
+    })
+    .map(function (jtt) {
+        if (!cache) {
+            jtt.query = self.getQuery();
+            jtt.queries = queries;
+            jtt.time = Date.now() - time;
+        }
+
+        return jtt;
     })
     .tap(function (results) {
         //console.log(query, results.length);

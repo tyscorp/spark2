@@ -21,6 +21,9 @@ app.get('/search', function (req, res) {
 
     var Q = req.param('query').split(' ');
     var k = parseInt(req.param('k')) || 10;
+    var P = !req.param('profile');
+
+    console.log(req.param('query'));
 
     ye.then(function () {
         var time = Date.now();
@@ -33,7 +36,7 @@ app.get('/search', function (req, res) {
             return _(cns).sortBy('score').reverse().value();
         })
         .map(function (cn) {
-            return cn.exec().then(function (jtts) {
+            return cn.exec(P).then(function (jtts) {
                 var vdoc = new VirtualDocument(cn, jtts);
 
                 vdoc.calculateScores(Q);
@@ -45,7 +48,12 @@ app.get('/search', function (req, res) {
             return _(results).pluck('data').flatten().sortBy('score').flatten().reverse().slice(0, k).value();
         })
         .then(function (data) {
-            console.log(Date.now() - time, 'ms');
+            if (!P) {
+                data = {
+                    time: Date.now() - time,
+                    data: data
+                };
+            }
             res.set({
                 'Content-Type': 'application/json; charset=utf-8'
             })
