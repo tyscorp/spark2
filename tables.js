@@ -27,6 +27,12 @@ Table.data = {
         fk: ['act'],
         fields: ['name']
     },
+    characters: {
+        name: 'characters',
+        search: ['name'],
+        fk: ['act'],
+        fields: ['name']
+    },
     genre: {
         name: 'genre',
         join: [{
@@ -53,7 +59,6 @@ Table.data = {
     },
     act: {
         name: 'act',
-        search: ['character_name'],
         join: [{
             with_table: 'movies',
             key: ['movie_id', 'id']
@@ -61,8 +66,12 @@ Table.data = {
         {
             with_table: 'actors',
             key: ['actor_id', 'id']
+        },
+        {
+            with_table: 'characters',
+            key: ['character_id', 'id']
         }],
-        fields: ['actor_id', 'movie_id', 'character_name']
+        fields: ['actor_id', 'movie_id', 'character_id']
     }
 };
 

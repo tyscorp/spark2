@@ -8,6 +8,7 @@ function JTT (rows) {
     this.type = '';
 
     this.tf = [];
+    this.tfweighted = [];
     this.dl = 0;
 }
 
@@ -41,15 +42,21 @@ JTT.prototype.getSize = function () {
 
 JTT.prototype.calculateScoreA = function (Q, s, avdl, lnidf) {
     var tf = this.tf;
+    var tfweighted = this.tfweighted;
     var dl = this.dl;
 
     if (this.data.id === 452) {
-        console.log(tf, dl);
+        console.log(tf, dl, dl / avdl);
     }
 
     this.score_a = _.reduce(Q, function (score, keyword, i) {
-        if (!tf[i]) return score;
-        return score + (((1 + Math.log(1 + Math.log(tf[i]))) / ((1 - s) + s * (dl / avdl))) * lnidf[i]);
+        if (!tfweighted[i]) return score;
+
+        var a = 1 + Math.log(1 + Math.log(tfweighted[i]));
+        var b = (1 - s) + s;
+
+        return score + ((a / b) * (lnidf[i] + a*5));
+        return score + (((a / b) * lnidf[i]));
     }, 0);
 
     return this.score_a;
@@ -59,23 +66,27 @@ JTT.prototype.calcTF = function (Q) {
     this.tf = _.map(Q, function (regex) {
         return matchKeyword(regex, this.data);
     }, this);
+
+    this.tfweighted = _.map(Q, function (regex) {
+        return matchKeyword(regex, this.data, true);
+    }, this);
 };
 
 JTT.prototype.toJSON = function () {
     var obj = {};
-    obj[this.type] = _.merge(this.data, { score_a: this.score_a });
+    obj[this.type] = _.merge(this.data, { score: this.score, score_a: this.score_a, score_z: this.score_z });
     return obj;
 };
 
-function matchKeyword (regex, tree) {
+function matchKeyword (regex, tree, w) {
     return _.reduce(tree, function (tf, val, key) {
         if (_.isString(val)) {
             if (regex.test(val)) {
-                return tf + 1;
+                return tf + 1 + (w ? ((regex.toString().length - 3) / val.length) * 100: 0);
             }
         }
         else {
-            return tf + matchKeyword(regex, val);
+            return tf + matchKeyword(regex, val, w);
         }
 
         return tf;
@@ -104,4 +115,5 @@ function getSize (tree) {
         return score;
     }, 1);
 };
+
 module.exports = JTT;

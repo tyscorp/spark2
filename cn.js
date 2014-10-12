@@ -14,7 +14,7 @@ function execQuery (query) {
     var time = Date.now();
 
     return mysql.queryAsync(query).get(0).tap(function (results) {
-        //console.log(query, (Date.now() - time) + ' ms');
+        //console.log(/*query*/ (Date.now() - time) + ' ms');
 
         queryCache.set(query, results);
     });
@@ -63,8 +63,6 @@ CandidateNetwork.prototype.exec = function () {
 
     var index_key = table_name.substr(0, table_name.length - 1) + '_id';
 
-    //var select = '*, `' + table_name + '`.`id` AS ' + index_key;
-
     var select = _(this.getTables())
     .map(function (table_name) {
         var table = Table.getTable(table_name);
@@ -95,7 +93,6 @@ CandidateNetwork.prototype.exec = function () {
             });
         }
 
-        
         // AND
         var ids = _.map(results, function (rows) {
             return _(rows).pluck(index_key).value();
@@ -119,7 +116,7 @@ CandidateNetwork.prototype.exec = function () {
         .value();*/
     })
     .tap(function (results) {
-        console.log(query, results.length);
+        //console.log(query, results.length);
     });
 };
 
@@ -397,7 +394,6 @@ function generate_all (valid, max_depth, Q) {
         });
     })
     .flatten()
-    .filter({ valid: true })
     .uniq(function (cn) {
         return JSON.stringify(cn.getGraph());
     })

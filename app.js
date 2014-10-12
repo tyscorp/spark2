@@ -23,6 +23,7 @@ app.get('/search', function (req, res) {
     var k = parseInt(req.param('k')) || 10;
 
     ye.then(function () {
+        var time = Date.now();
         CN.generate(Q).map(function (cn) {
             cn.score = cn.getNormalizationScore();
             cn.query = cn.getQuery();
@@ -44,6 +45,7 @@ app.get('/search', function (req, res) {
             return _(results).pluck('data').flatten().sortBy('score').flatten().reverse().slice(0, k).value();
         })
         .then(function (data) {
+            console.log(Date.now() - time, 'ms');
             res.set({
                 'Content-Type': 'application/json; charset=utf-8'
             })
@@ -62,6 +64,7 @@ app.get('/search', function (req, res) {
 app.get('/tree', function (req, res) {
     if (!req.param('query')) return res.status(500).json({ error: 'no query' });
 
+   
     var Q = req.param('query').split(' ');
     var k = parseInt(req.param('k')) || 10;
 
