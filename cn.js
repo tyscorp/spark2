@@ -1,52 +1,23 @@
 var Promise = require('bluebird');
 var _ = require('lodash');
+var JTT = require('./jtt');
+var Table = require('./tables');
+var LRU = require('lru-cache');
+
+var queryCache = LRU(200);
 
 var mysql;
 
-var data_tables = {
-    movies: {
-        search: ['title'],
-        fk: ['genre', 'direct']
-    },
-    genres: {
-        search: ['genre'],
-        fk: ['genre']
-    },
-    directors: {
-        search: ['name'],
-        fk: ['direct']
-    }
-};
+function execQuery (query) {
+    if (queryCache.has(query)) return queryCache.get(query);
 
-var join_tables = {
-    genre: {
-        join: [{
-            data_table: 'movies',
-            key: ['movie_id', 'id']
-        },
-        {
-            data_table: 'genres',
-            key: ['genre_id', 'id']
-        }]
-    },
-    direct: {
-        join: [{
-            data_table: 'movies',
-            key: ['movie_id', 'id']
-        },
-        {
-            data_table: 'directors',
-            key: ['director_id', 'id']
-        }]
-    }
-};
+    var time = Date.now();
 
-function getTable (table_name) {
-    return data_tables[table_name] || join_tables[table_name];
-}
+    return mysql.queryAsync(query).get(0).tap(function (results) {
+        //console.log(query, (Date.now() - time) + ' ms');
 
-function isDataTable (table_name) {
-    return !!~Object.keys(data_tables).indexOf(table_name);
+        queryCache.set(query, results);
+    });
 }
 
 function CandidateNetwork (table_name, Q) {
@@ -87,35 +58,81 @@ CandidateNetwork.prototype.exec = function () {
     var q = mysql.escape(this.Q.join(' '));
     var tables = this.getTables().join(', ');
     var joins = this.getJoins().join(' AND ');
+    var table_name = this.table_name;
+    var query = this.getQuery();
+
+    var index_key = table_name.substr(0, table_name.length - 1) + '_id';
+
+    //var select = '*, `' + table_name + '`.`id` AS ' + index_key;
+
+    var select = _(this.getTables())
+    .map(function (table_name) {
+        var table = Table.getTable(table_name);
+
+        return _.map(table.fields, function (field) {
+            return '`' + table.name + '`.`' + field + '` AS ' + table.name + '_' + field;
+        });
+    })
+    .flatten()
+    .value()
+    .join(', ');
 
     var queries = _.map(this.getMatches(q), function (match) {
-        return 'SELECT * ' +
+        return 'SELECT `' + table_name + '`.`id` AS id, ' + select + ' ' +
                'FROM ' +
                tables + ' ' +
                'WHERE ' + joins + ' ' +
                'AND ' + match + ';'
     });
 
-    return Promise.map(queries, function (query) {
-        return mysql.queryAsync(query).get(0).tap(function () { console.log(query); });    
-    })
+    var cn = this;
+
+    return Promise.map(queries, execQuery)
     .then(function (results) {
         if (results.length === 1) {
-            return results[0];
+            return _.map(results[0], function (row) {
+                return new JTT(row);
+            });
         }
 
+        
+        // AND
         var ids = _.map(results, function (rows) {
-            return _(rows).pluck('id').value();
+            return _(rows).pluck(index_key).value();
         });
 
         var valid = _.intersection.apply(_, ids);
 
         return _.map(valid, function (id) {
-            return _.merge.apply(_, _.map(results, function (rows) {
-                return _.find(rows, { id : id });
-            }));
+            return new JTT(_.merge.apply(_, _.map(results, function (rows) {
+                return _.find(rows, function (row) {
+                    return row[index_key] == id;
+                });
+            })));
         });
-    });      
+        // OR
+        /*return _(results)
+        .flatten()
+        .map(function (result) {
+            return new JTT(result);
+        })
+        .value();*/
+    })
+    .tap(function (results) {
+        console.log(query, results.length);
+    });
+};
+
+CandidateNetwork.prototype.getGraph = function () {
+    var graph = {};
+    var table_name = this.table_name;
+    graph[table_name] = {};
+
+    _.forEach(this.connections, function (node) {
+        graph[table_name][node.table_name] = node.getGraph();
+    });
+
+    return graph;
 };
 
 CandidateNetwork.prototype.setScoreTable = function (scoreTable) {
@@ -129,9 +146,21 @@ CandidateNetwork.prototype.setScoreTable = function (scoreTable) {
     .value();
 };
 
-CandidateNetwork.prototype.getScore = function () {
-    // This is DISCOVER, not SPARK2
-    return this.scoreTable.length;
+// Candidate network scoring function (Equation 3)
+CandidateNetwork.prototype.getNormalizationScore = function () {
+    var tables = this.getTables();
+
+    var s1 = 0.15;
+    var s2 = 1 / (this.Q.length + 1);
+
+    var CN_ALL = tables.length;
+    var CN_NF = _.reduce(tables, function (n, table_name) {
+        if (Table.isDataTable(table_name)) return n + 1;
+
+        return n;
+    }, 0);
+
+    return (1 + s1 - s1 * CN_ALL) * (1 + s2 - s2 * CN_NF);
 };
 
 CandidateNetwork.prototype.getJoins = function () {
@@ -141,30 +170,29 @@ CandidateNetwork.prototype.getJoins = function () {
 
     var x = [];
 
-    if (!isDataTable(self.table_name)) {
-        var table = getTable(self.table_name);
+    var table = Table.getTable(self.table_name);
 
-        x = _.map(table.join, function (join) {
-            if (_.find(self.connections, { table_name: join.data_table })) {
-                return { 1: '`' + self.table_name + '`.`' + join.key[0] + '`', 2: '`' + join.data_table + '`.`' + join.key[1] + '`' };
+    if (table.join) {
+        x = x.concat(_.map(table.join, function (join) {
+
+            if (_.find(self.connections, { table_name: join.with_table })) {
+                return { a: '`' + self.table_name + '`.`' + join.key[0] + '`', b: '`' + join.with_table + '`.`' + join.key[1] + '`' };
             }
 
             return [];
-        });
+        }));
     }
-    else {
-        var table = getTable(self.table_name);
-
-        x = _.map(table.fk, function (table_name) {
+    if (table.fk) {
+        x = x.concat(_.map(table.fk, function (table_name) {
 
             if (_.find(self.connections, { table_name: table_name })) {
-                var t = getTable(table_name);
-                var join = _.find(t.join, { data_table: self.table_name });
-                return { 1: '`' + self.table_name + '`.`' + join.key[1] + '`', 2: '`' + table_name + '`.`' + join.key[0] + '`' };
+                var t = Table.getTable(table_name);
+                var join = _.find(t.join, { with_table: self.table_name });
+                return { a: '`' + self.table_name + '`.`' + join.key[1] + '`', b: '`' + table_name + '`.`' + join.key[0] + '`' };
             }
 
             return [];
-        });
+        }));
     }
 
     return _(x.concat(_.map(self.connections, function (node) {
@@ -174,7 +202,7 @@ CandidateNetwork.prototype.getJoins = function () {
     .flatten()
     .compact()
     .map(function (tuple) {
-        var t = [tuple[1], tuple[2]].sort();
+        var t = [tuple.a, tuple.b].sort();
         return t[0] + '=' + t[1];
     })
     .uniq()
@@ -184,14 +212,15 @@ CandidateNetwork.prototype.getJoins = function () {
 
 CandidateNetwork.prototype.getMatches = function (q) {
     return _(this.getTables())
-    .filter(function (table_name) {
-        return ~Object.keys(data_tables).indexOf(table_name);
-    })
     .map(function (table_name) {
-        var table = getTable(table_name);
-
+        return Table.getTable(table_name);
+    })
+    .filter(function (table) {
+        return !!table.search;
+    })
+    .map(function (table) {
         var x = _.map(table.search, function (field) {
-            return 'MATCH (`' + table_name + '`.`' + field + '`) AGAINST (' + q + ' IN BOOLEAN MODE)'
+            return 'MATCH (`' + table.name + '`.`' + field + '`) AGAINST (' + q + ' IN BOOLEAN MODE)'
         });
 
         if (x.length === 1) return x[0];
@@ -206,13 +235,15 @@ CandidateNetwork.prototype.trim = function () {
     this.connections = _.filter(this.connections, function (node) {
         return node.trim();
     });
+
+    return this;
 };
 
-CandidateNetwork.prototype.clean = function () {
+CandidateNetwork.prototype.toJSON = function () {
     var clean = _.omit(this, 'parent', 'valid');
 
     clean.connections = _.map(clean.connections, function (conn) {
-        return conn.clean();
+        return conn.toJSON();
     });
 
     return clean;
@@ -229,6 +260,16 @@ function Node (parent, table_name) {
     this.valid = false;
 }
 
+Node.prototype.getGraph = function () {
+    var graph = {};
+
+    _.forEach(this.connections, function (node) {
+        graph[node.table_name] = node.getGraph();
+    });
+
+    return graph;
+};
+
 Node.prototype.getTables = function () {
     return [this.table_name].concat(_.map(this.connections, function (node) {
         return node.getTables();
@@ -242,30 +283,28 @@ Node.prototype.getJoins = function () {
 
     var x = [];
 
-    if (!isDataTable(self.table_name)) {
-        var table = getTable(self.table_name);
+    var table = Table.getTable(self.table_name);
 
-        x = _.map(table.join, function (join) {
-            if (_.find(self.connections, { table_name: join.data_table })) {
-                return { 1: '`' + self.table_name + '`.`' + join.key[0] + '`', 2: '`' + join.data_table + '`.`' + join.key[1] + '`' };
+    if (table.join) {
+        x = x.concat(_.map(table.join, function (join) {
+            if (_.find(self.connections, { table_name: join.with_table })) {
+                return { a: '`' + self.table_name + '`.`' + join.key[0] + '`', b: '`' + join.with_table + '`.`' + join.key[1] + '`' };
             }
 
             return [];
-        });
+        }));
     }
-    else {
-        var table = getTable(self.table_name);
-
-        x = _.map(table.fk, function (table_name) {
+    if (table.fk) {
+        x = x.concat(_.map(table.fk, function (table_name) {
 
             if (_.find(self.connections, { table_name: table_name })) {
-                var t = getTable(table_name);
-                var join = _.find(t.join, { data_table: self.table_name });
-                return { 1: '`' + self.table_name + '`.`' + join.key[1] + '`', 2: '`' + table_name + '`.`' + join.key[0] + '`' };
+                var t = Table.getTable(table_name);
+                var join = _.find(t.join, { with_table: self.table_name });
+                return { a: '`' + self.table_name + '`.`' + join.key[1] + '`', b: '`' + table_name + '`.`' + join.key[0] + '`' };
             }
 
             return [];
-        });
+        }));
     }
 
     return x.concat(_.map(self.connections, function (node) {
@@ -281,11 +320,11 @@ Node.prototype.trim = function () {
     return this.valid;
 };
 
-Node.prototype.clean = function () {
+Node.prototype.toJSON = function () {
     var clean = _.omit(this, 'parent', 'valid');
 
     clean.connections = _.map(clean.connections, function (conn) {
-        return conn.clean();
+        return conn.toJSON();
     });
 
     return clean;
@@ -297,25 +336,21 @@ Node.prototype.setValid = function (value) {
     this.parent.setValid(value);
 };
 
-Node.prototype.isDataTable = function () {
-    return isDataTable(this.table_name);
-};
-
 var init = function (db) {
     mysql = db;
 };
 
 var generate = function (Q) {
-    return Promise.map(Object.keys(data_tables), function (table_name) {
-        var table = getTable(table_name);
+    var data_tables = Table.getDataTables();
 
+    return Promise.map(data_tables, function (table) {
         var query = 'SELECT * ' +
-                    'FROM `' + table_name + '` ' +
+                    'FROM `' + table.name + '` ' +
                     'WHERE MATCH (`' + table.search.join('`, `') + '`) ' +
                     'AGAINST (' + mysql.escape(Q.join(' ')) + ') LIMIT 1;';
 
         return mysql.queryAsync(query).spread(function (rows, fields) {
-            return { table_name: table_name, valid: rows.length > 0 };
+            return { table: table, valid: rows.length > 0 };
         });
     })
     .filter(function (result) {
@@ -324,38 +359,15 @@ var generate = function (Q) {
         return false;
     })
     .then(function (data) {
-        var valid_data_tables = _.pluck(data, 'table_name');
+        var valid_data_tables = _(data).pluck('table').pluck('name').value();
 
         return generate_all(valid_data_tables, 10, Q);
     })
-    .filter(function (cn) {
-        return cn.valid;
-    })
-    .map(function (cn) {
-        cn.trim();
-
-        return cn;
-    })
-    .then(function (cns) {
-        return _(cns)
-        .map(function (cn) {
-            return { query: cn.getQuery(), cn: cn };
-        })
-        .uniq(function (cn) {
-            return cn.query;
-        })
-        .pluck('cn')
-        .value();
-    })
     .tap(function (cns) {
-        var tables = Object.keys(data_tables);
-
-        var d = _.flatten(_.map(tables, function (table_name) {
+        var d = _.flatten(_.map(data_tables, function (table) {
             return _.map(Q, function (keyword) {
-                var table = getTable(table_name);
-
                 return _.map(table.search, function (field) {
-                    return { table_name: table_name, keyword: keyword, field: field };
+                    return { table_name: table.name, keyword: keyword, field: field };
                 });
             });
         }));
@@ -379,13 +391,17 @@ var generate = function (Q) {
 };
 
 function generate_all (valid, max_depth, Q) {
-    var tables = Object.keys(data_tables);
-
-    return _.flatten(_.times(max_depth, function (i) {
-        return _.map(valid, function (table_name) {
-            return generate_n(valid, new CandidateNetwork(table_name, Q), 0, i);
+    return _(max_depth).times(function (i) {
+        return _.map(_.pluck(Table.getDataTables(), 'name'), function (table_name) {
+            return generate_n(valid, new CandidateNetwork(table_name, Q), 0, i).trim();
         });
-    }));
+    })
+    .flatten()
+    .filter({ valid: true })
+    .uniq(function (cn) {
+        return JSON.stringify(cn.getGraph());
+    })
+    .value();
 }
 
 function generate_n (valid, network, i, limit) {
@@ -395,29 +411,28 @@ function generate_n (valid, network, i, limit) {
 
     if (i > limit) return network;
 
-    var table = getTable(network.table_name);
+    var table = Table.getTable(network.table_name);
 
     if (table.fk) {
-        network.connections = _(table.fk)
+        network.connections = network.connections.concat(_(table.fk)
         .map(function (table_name) {
             return generate_n(valid, new Node(network, table_name), i + 1, limit);
         })
-        .value();
+        .value());
     }
 
     if (table.join) {
-        network.connections = _(table.join)
+        network.connections = network.connections.concat(_(table.join)
         .filter(function (join) {
-            return ~valid.indexOf(join.data_table) &&
-                join.data_table !== network.parent.table_name &&
-                join.data_table !== network.parent.parent.table_name &&
-                join.data_table !== network.parent.parent.parent.table_name;
+            return ~valid.indexOf(join.with_table) &&
+                join.with_table !== network.parent.table_name &&
+                join.with_table !== network.parent.parent.table_name &&
+                join.with_table !== network.parent.parent.parent.table_name;
         })
         .map(function (join) {
-            
-            return generate_n(valid, new Node(network, join.data_table), i + 1, limit);
+            return generate_n(valid, new Node(network, join.with_table), i + 1, limit);
         })
-        .value();
+        .value());
     }
 
     return network;

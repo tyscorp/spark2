@@ -3,6 +3,9 @@ var Promise = require('bluebird');
 var _ = require('lodash');
 var MySQL = require('mysql');
 var CN = require('./cn');
+var VirtualDocument = require('./vdoc');
+
+Promise.longStackTraces();
 
 var app = express();
 var mysql = Promise.promisifyAll(MySQL.createPool(require('./config')));
@@ -21,7 +24,7 @@ app.get('/search', function (req, res) {
 
     ye.then(function () {
         CN.generate(Q).map(function (cn) {
-            cn.score = cn.getScore();
+            cn.score = cn.getNormalizationScore();
             cn.query = cn.getQuery();
             return cn;
         })
@@ -29,30 +32,16 @@ app.get('/search', function (req, res) {
             return _(cns).sortBy('score').reverse().value();
         })
         .map(function (cn) {
-            var time = Date.now();
+            return cn.exec().then(function (jtts) {
+                var vdoc = new VirtualDocument(cn, jtts);
 
-            return cn.exec().map(function (result) {
-                result.type = cn.table_name;
+                vdoc.calculateScores(Q);
 
-                // temporary scoring function
-                result.score = cn.score * _.reduce(Q, function (score, keyword, index) {
-                    if (result.title && new RegExp(keyword, 'i').test(result.title)) {
-                        score += 1 + (keyword.length / result.title.length);
-                        return score;
-                    }
-                    if (result.name && new RegExp(keyword, 'i').test(result.name)) {
-                        score += 1 + (keyword.length / result.name.length);
-                        return score;
-                    }
-
-                    return score;
-                }, 0);
-
-                return result;
+                return vdoc;
             });
         }, { concurrency: 1 })
         .then(function (results) {
-            return _(results).flatten().sortBy('score').reverse().uniq('id').slice(0, k).value();
+            return _(results).pluck('data').flatten().sortBy('score').flatten().reverse().slice(0, k).value();
         })
         .then(function (data) {
             res.set({
@@ -62,13 +51,15 @@ app.get('/search', function (req, res) {
             .send(JSON.stringify(data, undefined, '    '));
         })
         .catch(function (error) {
-            console.log(error);
+            //console.log(error);
             res.status(500).send({ error: error });
+
+            throw error;
         });
     });
 });
 
-app.get('/cn', function (req, res) {
+app.get('/tree', function (req, res) {
     if (!req.param('query')) return res.status(500).json({ error: 'no query' });
 
     var Q = req.param('query').split(' ');
@@ -76,8 +67,45 @@ app.get('/cn', function (req, res) {
 
     ye.then(function () {
         CN.generate(Q).map(function (cn) {
-            cn.score = cn.getScore();
+            cn.score = cn.getNormalizationScore();
             cn.query = cn.getQuery();
+            return cn;
+        })
+        .then(function (cns) {
+            return _(cns).sortBy('score').reverse().value();
+        })
+        .map(function (cn) {
+            return cn.exec().then(function (jtts) {
+                return new VirtualDocument(cn, jtts);
+            });
+        }, { concurrency: 1 })
+        .then(function (data) {
+            res.set({
+                'Content-Type': 'application/json; charset=utf-8'
+            })
+            .status(200)
+            .send(JSON.stringify(data, undefined, '    '));
+        })
+        .catch(function (error) {
+            //console.log(error);
+            res.status(500).send({ error: error });
+
+            throw error;
+        });
+    });
+});
+
+app.get('/graph', function (req, res) {
+    if (!req.param('query')) return res.status(500).json({ error: 'no query' });
+
+    var Q = req.param('query').split(' ');
+    var k = parseInt(req.param('k')) || 10;
+
+    ye.then(function () {
+        CN.generate(Q).map(function (cn) {
+            cn.score = cn.getNormalizationScore();
+            cn.query = cn.getQuery();
+            cn.graph = cn.getGraph();
             return cn;
         })
         .then(function (cns) {
@@ -85,7 +113,7 @@ app.get('/cn', function (req, res) {
             .sortBy('score')
             .reverse()
             .map(function (cn) {
-                return cn.clean(); // remove circular
+                return _.omit(cn, 'connections', 'Q', 'scoreTable');
             })
             .value();
         })
